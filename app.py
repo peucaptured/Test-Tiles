@@ -195,6 +195,8 @@ def cave_lake(cave_floor: np.ndarray, seed: int, level: float = 0.10) -> np.ndar
 # =========================
 # Biome classify + 2 layers
 # =========================
+from typing import Tuple, List
+
 def generate_world(
     w: int,
     h: int,
@@ -206,11 +208,12 @@ def generate_world(
     n_lakes: int,
     cave_ratio: float,
     cave_lake_level: float,
-) -> Tuple[np.ndarray, np.ndarray]:
+) -> Tuple[np.ndarray, np.ndarray, List[Tuple[str,int,int]]]:
     """
     Retorna:
     - ground[y,x] (uint8): IDs T_*
-    - overlay[y,x] (uint8): IDs O_*
+    - overlay[y,x] (uint8): IDs O_*  (SEM árvores grandes)
+    - objects: lista de ("tree_2x2", x, y)
     """
     rng = np.random.default_rng(seed)
 
@@ -231,9 +234,8 @@ def generate_world(
     fresh = carve_rivers(height, ocean, seed=seed, n_rivers=n_rivers)
     fresh = add_lakes(fresh, land, seed=seed, n_lakes=n_lakes)
 
-    # domínio de caverna: escolhe uma “ilha” de caverna na terra (máscara)
+    # domínio de caverna
     cave_solid, cave_floor = gen_cave_domain(h, w, seed=seed)
-    # limita a caverna a uma fração do mapa (cave_ratio) e só em terra
     cave_noise = rng.random((h, w))
     cave_domain = (cave_noise < cave_ratio) & land
     cave_floor = cave_floor & cave_domain
@@ -242,56 +244,59 @@ def generate_world(
 
     # ground
     ground = np.full((h, w), T_GRASS, dtype=np.uint8)
-
-    # oceano
     ground[ocean] = T_OCEAN
-
-    # água doce (não sobre oceano)
     ground[(fresh == 1) & land] = T_FRESH
-
-    # costa (não cobre água doce)
     ground[coast & (ground == T_GRASS)] = T_BEACH
 
-    # deserto vs floresta vs grama
-    # (aplica só em terra que não é água doce nem caverna)
     base_land = land & (ground != T_FRESH) & (~cave_domain)
 
-    # deserto onde seco
     ground[base_land & (moisture < desert_dry) & (~coast)] = T_DESERT
-
-    # floresta onde úmido
     ground[base_land & (moisture > forest_moist) & (~coast) & (ground != T_DESERT)] = T_FORESTF
 
-    # caverna
     ground[cave_floor] = T_CAVEF
-    ground[cave_water] = T_FRESH  # água doce dentro da caverna
+    ground[cave_water] = T_FRESH
 
-    # overlay
+    # overlay (aqui ficam só coisas 1x1)
     overlay = np.zeros((h, w), dtype=np.uint8)
-
-    # distribuição de decorações (simples, mas boa)
     deco = rng.random((h, w))
 
-    # árvores em floresta/grama (evita costa e perto de rios)
     near_fresh = near_mask((ground == T_FRESH).astype(np.uint8), dist=1)
     can_tree = ((ground == T_FORESTF) | (ground == T_GRASS)) & (~near_fresh) & (~coast)
-    overlay[can_tree & (deco < 0.10)] = O_TREES
 
-    # rochas em deserto/grama
+    # >>>>>>> AQUI: em vez de O_TREES, vamos gerar objects 2x2
+    objects = []
+    occ = np.zeros((h, w), dtype=bool)
+
+    def can_place_2x2(x: int, y: int) -> bool:
+        if x < 0 or y < 0 or x + 1 >= w or y + 1 >= h:
+            return False
+        if occ[y:y+2, x:x+2].any():
+            return False
+        g = ground[y:y+2, x:x+2]
+        if not np.isin(g, [T_FORESTF, T_GRASS]).all():
+            return False
+        # opcional: garante que não está muito perto de água doce/mar
+        if near_mask((ground == T_FRESH).astype(np.uint8), dist=1)[y:y+2, x:x+2].any():
+            return False
+        return True
+
+    # densidade das árvores (ajuste 0.06~0.12)
+    for y in range(h - 1):
+        for x in range(w - 1):
+            if can_tree[y, x] and deco[y, x] < 0.06 and can_place_2x2(x, y):
+                objects.append(("tree_2x2", x, y))
+                occ[y:y+2, x:x+2] = True
+
+    # rochas/cactos etc continuam no overlay 1x1
     can_rocks = ((ground == T_DESERT) | (ground == T_GRASS)) & (~near_fresh)
     overlay[can_rocks & (deco > 0.92)] = O_ROCKS
-
-    # cactos em deserto
     overlay[(ground == T_DESERT) & (deco < 0.06)] = O_CACTUS
-
-    # decoração de caverna
     overlay[(ground == T_CAVEF) & (deco < 0.10)] = O_CAVEDEC
 
-    # espuma no mar perto da costa
     ocean_near_coast = (ground == T_OCEAN) & near_mask((ground == T_BEACH).astype(np.uint8), dist=1)
     overlay[ocean_near_coast & (deco < 0.20)] = O_FOAM
 
-    return ground, overlay
+    return ground, overlay, objects
 
 
 # =========================
@@ -609,7 +614,7 @@ with tab2:
         st.info("Clique em **Gerar mapa** na barra lateral.")
         st.stop()
 
-    ground, overlay = generate_world(
+    ground, overlay, objects = generate_world(
         w=map_w, h=map_h, seed=int(seed),
         sea_level=float(sea_level),
         forest_moist=float(forest_moist),
@@ -620,7 +625,7 @@ with tab2:
         cave_lake_level=float(cave_lake_level),
     )
 
-    img = render_layers(sheet, ground, overlay, mapping, seed=int(seed), scale=int(scale))
+    img = render_layers(sheet, ground, overlay, objects, mapping, seed=seed, scale=scale)
 
     left, right = st.columns([2, 1])
 
