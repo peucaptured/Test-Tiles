@@ -130,6 +130,106 @@ def ensure_state():
     st.session_state.setdefault("tile_r", 0)
     st.session_state.setdefault("row_page", 0)
 
+st.subheader("Adicionar ao catálogo")
+
+# Tipo
+kind_ui = st.radio(
+    "Tipo de item",
+    ["Tile (1x1)", "Objeto (multi-tile)"],
+    horizontal=True,
+    help="Tile (1x1) é chão/água/borda. Objeto é algo maior: árvore, rocha, altar, etc."
+)
+entry_kind = "object" if kind_ui.startswith("Objeto") else "tile"
+
+st.divider()
+
+# Bioma + classificadores
+biome_name = st.selectbox(
+    "Bioma",
+    list(BIOMES.keys()),
+    index=list(BIOMES.keys()).index(st.session_state.get("last_biome", "Floresta")) if st.session_state.get("last_biome") in BIOMES else 0,
+    help="Isso adiciona automaticamente a tag biome:* e filtra as opções de terreno/detalhe."
+)
+
+terrain = st.selectbox(
+    "Terreno principal",
+    BIOMES[biome_name]["terrain"],
+    index=0,
+    help="O 'material' dominante da tile. Ex.: grass, rock, sand, water..."
+)
+
+role = st.selectbox(
+    "Função da tile",
+    ROLES,
+    index=ROLES.index(st.session_state.get("last_role", "role:base")) if st.session_state.get("last_role") in ROLES else 0,
+    help="Use role:base para o chão base do bioma. role:edge/corner para transições."
+)
+
+# Detalhes (opcionais, aparecem conforme bioma)
+details_opts = BIOMES[biome_name].get("details", [])
+details = st.multiselect(
+    "Detalhes (opcional)",
+    options=details_opts,
+    default=st.session_state.get("last_details", []),
+    help="Microtags para diferenciar variações (moss, leaf_litter, wave, foam...)."
+)
+
+# Profundidade (só se bioma tiver)
+depth_opts = BIOMES[biome_name].get("depth", [])
+depth = None
+if depth_opts:
+    depth = st.selectbox("Profundidade (água)", ["(nenhuma)"] + depth_opts, index=0)
+    if depth != "(nenhuma)":
+        details = list(details) + [depth]
+
+# Tags extras (custom)
+custom_tags_raw = st.text_input(
+    "Tags extras (opcional, separadas por vírgula)",
+    value=st.session_state.get("last_custom_tags", ""),
+    help="Para casos especiais. Ex.: overlay, bridge, cliff, walkway..."
+)
+custom_tags = [t.strip() for t in custom_tags_raw.split(",") if t.strip()]
+
+# Monta tags finais automaticamente
+tags = build_tags(biome_name, terrain, role, details, custom_tags)
+
+st.caption("Tags finais (geradas automaticamente):")
+st.code(", ".join(tags) if tags else "(nenhuma)")
+
+st.divider()
+
+# Nome (com sugestão automática)
+variant_n = st.number_input(
+    "Variação #",
+    min_value=1, max_value=99,
+    value=int(st.session_state.get("last_variant_n", 1)),
+    step=1,
+    help="Use isso para gerar nomes consistentes: ..._01, ..._02, ..."
+)
+
+auto_name = suggest_name(entry_kind, biome_name, terrain, role, int(variant_n))
+use_auto = st.toggle(
+    "Gerar nome automaticamente",
+    value=True,
+    help="Recomendado: mantém padrão e evita nomes inconsistentes."
+)
+
+name = st.text_input(
+    "Nome",
+    value=(auto_name if use_auto else st.session_state.get("last_name", "")),
+    help="Ex.: tile_forest_grass_base_01 | obj_cave_rock_detail_01"
+)
+
+# Peso
+weight = st.number_input(
+    "Peso (sorteio)",
+    min_value=0.01, max_value=100.0,
+    value=float(st.session_state.get("last_weight", 1.0)),
+    step=0.25,
+    help="Quanto maior, mais comum esse item será escolhido no gerador."
+)
+
+
 def catalog_to_json_dict(tile_size: int, cols: int, rows: int) -> Dict:
     entries = list(st.session_state["catalog"].values())
     # normaliza/ordena por (r,c,w,h)
@@ -324,13 +424,13 @@ with tabs[0]:
 
         name = st.text_input("Nome (ex.: grass_plain_01, tree_big_01)", value=st.session_state.get("last_name", ""))
 
-        if kind.startswith("tile"):
+        if entry_kind == "tile":
             w_obj, h_obj = 1, 1
-            weight = st.number_input("Peso (sorteio)", min_value=0.01, max_value=100.0, value=float(st.session_state.get("last_weight", 1.0)), step=0.25)
         else:
-            w_obj = st.number_input("Largura (tiles)", 2, 8, int(st.session_state.get("last_w", 2)), 1)
-            h_obj = st.number_input("Altura (tiles)", 2, 8, int(st.session_state.get("last_h", 2)), 1)
-            weight = st.number_input("Peso (sorteio)", min_value=0.01, max_value=100.0, value=float(st.session_state.get("last_weight", 1.0)), step=0.25)
+            st.markdown("#### Tamanho do objeto (em tiles)")
+            w_obj = st.number_input("Largura", 2, 8, int(st.session_state.get("last_w", 2)), 1, help="Quantos tiles na horizontal.")
+            h_obj = st.number_input("Altura", 2, 8, int(st.session_state.get("last_h", 2)), 1, help="Quantos tiles na vertical.")
+
 
         # preview do objeto (se multi)
         c = int(st.session_state["tile_c"])
@@ -387,6 +487,12 @@ with tabs[0]:
                 st.session_state["last_weight"] = float(weight)
                 st.session_state["last_w"] = int(w_obj)
                 st.session_state["last_h"] = int(h_obj)
+                st.session_state["last_biome"] = biome_name
+                st.session_state["last_role"] = role
+                st.session_state["last_details"] = list(details)
+                st.session_state["last_custom_tags"] = custom_tags_raw
+                st.session_state["last_variant_n"] = int(variant_n)
+
 
                 st.success(f"Adicionado: {entry.id}")
                 st.rerun()
