@@ -8,6 +8,7 @@ from typing import Dict, List, Tuple, Optional
 import numpy as np
 import streamlit as st
 from PIL import Image
+st.set_page_config(page_title="Tileset -> Catalog JSON", layout="wide")
 
 # ============================================================
 #  Tileset -> Catalog JSON (1x1 tiles + multi-tile objects)
@@ -19,6 +20,60 @@ from PIL import Image
 # -------------------------
 # Core: sheet + helpers
 # -------------------------
+
+
+BIOMES = {
+    "Floresta": {"biome_tag": "biome:forest", "terrain": ["grass", "dirt", "rock", "water", "mud"],
+                 "details": ["moss", "leaf_litter", "roots", "flowers", "stones"]},
+    "Caverna": {"biome_tag": "biome:cave", "terrain": ["rock", "gravel", "mud", "water", "lava"],
+                "details": ["moss", "stalagmite", "stalactite", "cracks", "bones"]},
+    "Rio": {"biome_tag": "biome:river", "terrain": ["water", "rock", "sand", "dirt", "mud"],
+            "details": ["bank", "foam", "reeds", "pebbles"], "depth": ["depth:shallow", "depth:deep"]},
+    "Lago": {"biome_tag": "biome:lake", "terrain": ["water", "sand", "dirt", "mud", "rock"],
+             "details": ["shore", "algae", "lily", "foam", "reeds"], "depth": ["depth:shallow", "depth:deep"]},
+    "Costa do Mar": {"biome_tag": "biome:coast", "terrain": ["sea", "sand", "rock", "water"],
+                     "details": ["wave", "foam", "wet_sand", "tidepool", "shells"], "depth": ["depth:shallow", "depth:deep"]},
+    "Deserto": {"biome_tag": "biome:desert", "terrain": ["sand", "rock", "dirt"],
+                "details": ["dune", "cracks", "pebbles", "dry_grass", "bones"]},
+    "Montanha": {"biome_tag": "biome:mountain", "terrain": ["rock", "dirt", "grass", "snow"],
+                 "details": ["cliff", "scree", "moss", "cracks", "pebbles"]},
+    "Terra Batida": {"biome_tag": "biome:pathland", "terrain": ["dirt", "grass", "rock", "sand"],
+                     "details": ["path", "track", "ruts", "pebbles", "dry_grass"]},
+}
+
+ROLES = ["role:base", "role:variant", "role:edge", "role:corner", "role:detail"]
+
+def _slug(s: str) -> str:
+    s = (s or "").strip().lower().replace(" ", "_").replace("-", "_")
+    s = "".join(ch for ch in s if ch.isalnum() or ch in "_:")
+    while "__" in s:
+        s = s.replace("__", "_")
+    return s.strip("_")
+
+def build_tags(biome_name: str, terrain: str, role: str, details: list[str], extra: list[str]) -> list[str]:
+    tags = []
+    if biome_name in BIOMES:
+        tags.append(BIOMES[biome_name]["biome_tag"])
+    if terrain: tags.append(_slug(terrain))
+    if role: tags.append(role)
+    for d in (details or []): tags.append(_slug(d))
+    for t in (extra or []):
+        t = t.strip()
+        if t: tags.append(_slug(t))
+    # dedupe preservando ordem
+    out, seen = [], set()
+    for t in tags:
+        if t and t not in seen:
+            seen.add(t); out.append(t)
+    return out
+
+def suggest_name(kind: str, biome_name: str, terrain: str, role: str, variant_n: int) -> str:
+    prefix = "obj" if kind == "object" else "tile"
+    b = _slug(biome_name)
+    t = _slug(terrain)
+    r = _slug(role).replace("role:", "")
+    return f"{prefix}_{b}_{t}_{r}_{variant_n:02d}"
+
 @dataclass(frozen=True)
 class TileCoord:
     c: int
@@ -129,105 +184,6 @@ def ensure_state():
     st.session_state.setdefault("tile_c", 0)
     st.session_state.setdefault("tile_r", 0)
     st.session_state.setdefault("row_page", 0)
-
-st.subheader("Adicionar ao catálogo")
-
-# Tipo
-kind_ui = st.radio(
-    "Tipo de item",
-    ["Tile (1x1)", "Objeto (multi-tile)"],
-    horizontal=True,
-    help="Tile (1x1) é chão/água/borda. Objeto é algo maior: árvore, rocha, altar, etc."
-)
-entry_kind = "object" if kind_ui.startswith("Objeto") else "tile"
-
-st.divider()
-
-# Bioma + classificadores
-biome_name = st.selectbox(
-    "Bioma",
-    list(BIOMES.keys()),
-    index=list(BIOMES.keys()).index(st.session_state.get("last_biome", "Floresta")) if st.session_state.get("last_biome") in BIOMES else 0,
-    help="Isso adiciona automaticamente a tag biome:* e filtra as opções de terreno/detalhe."
-)
-
-terrain = st.selectbox(
-    "Terreno principal",
-    BIOMES[biome_name]["terrain"],
-    index=0,
-    help="O 'material' dominante da tile. Ex.: grass, rock, sand, water..."
-)
-
-role = st.selectbox(
-    "Função da tile",
-    ROLES,
-    index=ROLES.index(st.session_state.get("last_role", "role:base")) if st.session_state.get("last_role") in ROLES else 0,
-    help="Use role:base para o chão base do bioma. role:edge/corner para transições."
-)
-
-# Detalhes (opcionais, aparecem conforme bioma)
-details_opts = BIOMES[biome_name].get("details", [])
-details = st.multiselect(
-    "Detalhes (opcional)",
-    options=details_opts,
-    default=st.session_state.get("last_details", []),
-    help="Microtags para diferenciar variações (moss, leaf_litter, wave, foam...)."
-)
-
-# Profundidade (só se bioma tiver)
-depth_opts = BIOMES[biome_name].get("depth", [])
-depth = None
-if depth_opts:
-    depth = st.selectbox("Profundidade (água)", ["(nenhuma)"] + depth_opts, index=0)
-    if depth != "(nenhuma)":
-        details = list(details) + [depth]
-
-# Tags extras (custom)
-custom_tags_raw = st.text_input(
-    "Tags extras (opcional, separadas por vírgula)",
-    value=st.session_state.get("last_custom_tags", ""),
-    help="Para casos especiais. Ex.: overlay, bridge, cliff, walkway..."
-)
-custom_tags = [t.strip() for t in custom_tags_raw.split(",") if t.strip()]
-
-# Monta tags finais automaticamente
-tags = build_tags(biome_name, terrain, role, details, custom_tags)
-
-st.caption("Tags finais (geradas automaticamente):")
-st.code(", ".join(tags) if tags else "(nenhuma)")
-
-st.divider()
-
-# Nome (com sugestão automática)
-variant_n = st.number_input(
-    "Variação #",
-    min_value=1, max_value=99,
-    value=int(st.session_state.get("last_variant_n", 1)),
-    step=1,
-    help="Use isso para gerar nomes consistentes: ..._01, ..._02, ..."
-)
-
-auto_name = suggest_name(entry_kind, biome_name, terrain, role, int(variant_n))
-use_auto = st.toggle(
-    "Gerar nome automaticamente",
-    value=True,
-    help="Recomendado: mantém padrão e evita nomes inconsistentes."
-)
-
-name = st.text_input(
-    "Nome",
-    value=(auto_name if use_auto else st.session_state.get("last_name", "")),
-    help="Ex.: tile_forest_grass_base_01 | obj_cave_rock_detail_01"
-)
-
-# Peso
-weight = st.number_input(
-    "Peso (sorteio)",
-    min_value=0.01, max_value=100.0,
-    value=float(st.session_state.get("last_weight", 1.0)),
-    step=0.25,
-    help="Quanto maior, mais comum esse item será escolhido no gerador."
-)
 
 
 def catalog_to_json_dict(tile_size: int, cols: int, rows: int) -> Dict:
@@ -413,127 +369,253 @@ with tabs[0]:
                 st.rerun()
 
         st.caption(f"Ignorados: {len(st.session_state['ignored'])} tiles")
-
-    with right:
-        st.subheader("Adicionar ao catálogo (tile 1x1 ou objeto multi-tile)")
-
-        kind = st.radio("Tipo", ["tile (1x1)", "objeto (multi-tile)"], horizontal=True)
-        default_tags = ["ground", "grass"] if "ground" in st.session_state.get("last_tags", ["ground"]) else ["ground"]
-        tags_str = st.text_input("Tags (separe por vírgula)", value=", ".join(st.session_state.get("last_tags", default_tags)))
-        tags = [t.strip() for t in tags_str.split(",") if t.strip()]
-
-        name = st.text_input("Nome (ex.: grass_plain_01, tree_big_01)", value=st.session_state.get("last_name", ""))
-
-        if entry_kind == "tile":
-            w_obj, h_obj = 1, 1
-        else:
-            st.markdown("#### Tamanho do objeto (em tiles)")
-            w_obj = st.number_input("Largura", 2, 8, int(st.session_state.get("last_w", 2)), 1, help="Quantos tiles na horizontal.")
-            h_obj = st.number_input("Altura", 2, 8, int(st.session_state.get("last_h", 2)), 1, help="Quantos tiles na vertical.")
-
-
-        # preview do objeto (se multi)
-        c = int(st.session_state["tile_c"])
-        r = int(st.session_state["tile_r"])
-        ok_bounds = region_in_bounds(sheet.cols, sheet.rows, c, r, int(w_obj), int(h_obj))
-
-        if not ok_bounds:
-            st.error("Esse recorte sai do tileset. Ajuste (c,r) ou (w,h).")
-        else:
-            prev = sheet.crop_tile(c, r, int(w_obj), int(h_obj))
-            st.image(prev.resize((min(360, prev.size[0] * 2), min(360, prev.size[1] * 2)), Image.NEAREST),
-                     caption=f"Preview recorte: (c={c}, r={r}, w={w_obj}, h={h_obj})")
-
-        # checagem rápida de conflitos de área (evita cadastrar duas vezes o mesmo objeto)
-        existing_entries = [CatalogEntry(**e) for e in st.session_state["catalog"].values()]
-        conflict = False
-        if ok_bounds:
-            tmp = CatalogEntry(
-                id="__tmp__",
-                kind="object" if kind.startswith("objeto") else "tile",
-                name=name or "unnamed",
-                tags=tags or [],
-                c=c, r=r, w=int(w_obj), h=int(h_obj),
-                weight=float(weight),
+        with right:
+            st.subheader("Adicionar ao catálogo")
+        
+            # ----------------------------
+            # Tipo
+            # ----------------------------
+            kind_ui = st.radio(
+                "Tipo de item",
+                ["Tile (1x1)", "Objeto (multi-tile)"],
+                horizontal=True,
+                help="Tile: chão/água/bordas. Objeto: árvore/rocha/estrutura maior."
             )
-            for e in existing_entries:
-                if region_overlaps(tmp, e):
-                    conflict = True
-                    break
-
-        if conflict:
-            st.warning("⚠️ Essa área sobrepõe uma entry já cadastrada. Se for intencional, remova a antiga antes.")
-
-        add_btn = st.button("Adicionar ao catálogo", type="primary", use_container_width=True, disabled=not ok_bounds)
-        if add_btn:
-            if (c, r) in st.session_state["ignored"]:
-                st.warning("Esse tile está marcado como 'ignorado'. Remova de ignorados se você quer catalogar.")
+            entry_kind = "object" if kind_ui.startswith("Objeto") else "tile"
+        
+            st.divider()
+        
+            # ----------------------------
+            # Seletor: Bioma / Terreno / Função / Detalhes
+            # ----------------------------
+            biome_keys = list(BIOMES.keys())
+            last_biome = st.session_state.get("last_biome")
+            biome_idx = biome_keys.index(last_biome) if last_biome in BIOMES else 0
+        
+            biome_name = st.selectbox(
+                "Bioma",
+                biome_keys,
+                index=biome_idx,
+                help="Define automaticamente biome:* e filtra opções de terreno/detalhes."
+            )
+        
+            terrain_opts = BIOMES[biome_name]["terrain"]
+            terrain = st.selectbox(
+                "Terreno principal",
+                terrain_opts,
+                index=0,
+                help="Material dominante. Ex.: grass, rock, sand, water..."
+            )
+        
+            last_role = st.session_state.get("last_role", "role:base")
+            role_idx = ROLES.index(last_role) if last_role in ROLES else 0
+            role = st.selectbox(
+                "Função da tile",
+                ROLES,
+                index=role_idx,
+                help="role:base (chão base), role:variant (variação), role:edge/corner (transição), role:detail (overlay)."
+            )
+        
+            details_opts = BIOMES[biome_name].get("details", [])
+            last_details = st.session_state.get("last_details", [])
+            # mantém apenas os que ainda existem no bioma escolhido
+            last_details = [d for d in last_details if d in details_opts]
+        
+            details = st.multiselect(
+                "Detalhes (opcional)",
+                options=details_opts,
+                default=last_details,
+                help="Microtags (moss, foam, cracks...) para diferenciar variações."
+            )
+        
+            # Profundidade (se aplicável)
+            depth_opts = BIOMES[biome_name].get("depth", [])
+            if depth_opts:
+                depth = st.selectbox("Profundidade (água)", ["(nenhuma)"] + depth_opts, index=0)
+                if depth != "(nenhuma)":
+                    details = list(details) + [depth]
+        
+            # Tags extras (custom)
+            custom_tags_raw = st.text_input(
+                "Tags extras (opcional, separadas por vírgula)",
+                value=st.session_state.get("last_custom_tags", ""),
+                help="Para casos especiais. Ex.: bridge, cliff, overlay, walkway..."
+            )
+            custom_tags = [t.strip() for t in custom_tags_raw.split(",") if t.strip()]
+        
+            # Tags finais
+            tags = build_tags(biome_name, terrain, role, list(details), custom_tags)
+        
+            st.caption("Tags finais (geradas automaticamente):")
+            st.code(", ".join(tags) if tags else "(nenhuma)")
+        
+            st.divider()
+        
+            # ----------------------------
+            # Nome (sugestão automática)
+            # ----------------------------
+            variant_n = st.number_input(
+                "Variação #",
+                min_value=1, max_value=99,
+                value=int(st.session_state.get("last_variant_n", 1)),
+                step=1,
+                help="Gera nomes consistentes: ..._01, ..._02, ..."
+            )
+            auto_name = suggest_name(entry_kind, biome_name, terrain, role, int(variant_n))
+        
+            use_auto = st.toggle(
+                "Gerar nome automaticamente",
+                value=True,
+                help="Recomendado: evita nomes fora do padrão."
+            )
+            name = st.text_input(
+                "Nome",
+                value=(auto_name if use_auto else st.session_state.get("last_name", "")),
+                help="Ex.: tile_floresta_grass_base_01 | obj_caverna_rock_detail_01"
+            )
+        
+            # ----------------------------
+            # Peso
+            # ----------------------------
+            weight = st.number_input(
+                "Peso (sorteio)",
+                min_value=0.01, max_value=100.0,
+                value=float(st.session_state.get("last_weight", 1.0)),
+                step=0.25,
+                help="Quanto maior, mais comum o item no sorteio."
+            )
+        
+            # ----------------------------
+            # Tamanho (objeto) / fixo (tile)
+            # ----------------------------
+            if entry_kind == "tile":
+                w_obj, h_obj = 1, 1
             else:
-                entry_kind = "object" if kind.startswith("objeto") else "tile"
-                entry_id = make_entry_id(c, r, int(w_obj), int(h_obj), entry_kind)
-                entry = CatalogEntry(
-                    id=entry_id,
+                st.markdown("#### Tamanho do objeto (em tiles)")
+                w_obj = st.number_input(
+                    "Largura", 2, 8,
+                    int(st.session_state.get("last_w", 2)),
+                    1,
+                    help="Quantos tiles na horizontal."
+                )
+                h_obj = st.number_input(
+                    "Altura", 2, 8,
+                    int(st.session_state.get("last_h", 2)),
+                    1,
+                    help="Quantos tiles na vertical."
+                )
+        
+            # ----------------------------
+            # Preview do recorte
+            # ----------------------------
+            c = int(st.session_state["tile_c"])
+            r = int(st.session_state["tile_r"])
+            ok_bounds = region_in_bounds(sheet.cols, sheet.rows, c, r, int(w_obj), int(h_obj))
+        
+            if not ok_bounds:
+                st.error("Esse recorte sai do tileset. Ajuste (c,r) ou (w,h).")
+            else:
+                prev = sheet.crop_tile(c, r, int(w_obj), int(h_obj))
+                st.image(
+                    prev.resize((min(360, prev.size[0] * 2), min(360, prev.size[1] * 2)), Image.NEAREST),
+                    caption=f"Preview recorte: (c={c}, r={r}, w={w_obj}, h={h_obj})"
+                )
+        
+            # ----------------------------
+            # Conflitos (sobreposição)
+            # ----------------------------
+            existing_entries = [CatalogEntry(**e) for e in st.session_state["catalog"].values()]
+            conflict = False
+            if ok_bounds:
+                tmp = CatalogEntry(
+                    id="__tmp__",
                     kind=entry_kind,
-                    name=name.strip() if name.strip() else entry_id,
-                    tags=tags,
+                    name=(name.strip() if name else "unnamed"),
+                    tags=tags or [],
                     c=c, r=r, w=int(w_obj), h=int(h_obj),
                     weight=float(weight),
                 )
-                add_entry(entry)
-
-                # lembra inputs
-                st.session_state["last_tags"] = tags
-                st.session_state["last_name"] = entry.name
-                st.session_state["last_weight"] = float(weight)
-                st.session_state["last_w"] = int(w_obj)
-                st.session_state["last_h"] = int(h_obj)
-                st.session_state["last_biome"] = biome_name
-                st.session_state["last_role"] = role
-                st.session_state["last_details"] = list(details)
-                st.session_state["last_custom_tags"] = custom_tags_raw
-                st.session_state["last_variant_n"] = int(variant_n)
-
-
-                st.success(f"Adicionado: {entry.id}")
-                st.rerun()
-
-        st.divider()
-        st.markdown("### Catálogo atual")
-        st.caption("Dica: use filtros por tag para achar rápido.")
-        all_entries = list(st.session_state["catalog"].values())
-
-        # filtros rápidos
-        all_tags = sorted({t for e in all_entries for t in (e.get("tags") or [])})
-        tag_filter = st.multiselect("Filtrar por tags", options=all_tags, default=[])
-        kind_filter = st.multiselect("Filtrar por tipo", options=["tile", "object"], default=["tile", "object"])
-
-        def _match(e: Dict) -> bool:
-            if e.get("kind") not in kind_filter:
-                return False
-            if tag_filter:
-                et = set(e.get("tags") or [])
-                if not set(tag_filter).issubset(et):
-                    return False
-            return True
-
-        filtered = [e for e in all_entries if _match(e)]
-        st.write(f"Items: **{len(filtered)}** (de {len(all_entries)})")
-
-        # lista compacta
-        for e in filtered[:250]:
-            cols_row = st.columns([3.2, 1.2, 0.9], gap="small")
-            with cols_row[0]:
-                st.markdown(f"**{e['id']}** — `{e['kind']}` — {e.get('name','')}")
-                st.caption(", ".join(e.get("tags") or []))
-            with cols_row[1]:
-                st.caption(f"(c={e['c']}, r={e['r']})  {e['w']}x{e['h']}")
-            with cols_row[2]:
-                if st.button("Remover", key=f"rm_{e['id']}", use_container_width=True):
-                    remove_entry(e["id"])
+                for e in existing_entries:
+                    if region_overlaps(tmp, e):
+                        conflict = True
+                        break
+        
+            if conflict:
+                st.warning("⚠️ Essa área sobrepõe uma entry já cadastrada. Se for intencional, remova a antiga antes.")
+        
+            # ----------------------------
+            # Add
+            # ----------------------------
+            add_btn = st.button("Adicionar ao catálogo", type="primary", use_container_width=True, disabled=not ok_bounds)
+            if add_btn:
+                if (c, r) in st.session_state["ignored"]:
+                    st.warning("Esse tile está marcado como 'ignorado'. Remova de ignorados se você quer catalogar.")
+                else:
+                    entry_id = make_entry_id(c, r, int(w_obj), int(h_obj), entry_kind)
+                    entry = CatalogEntry(
+                        id=entry_id,
+                        kind=entry_kind,
+                        name=name.strip() if name and name.strip() else entry_id,
+                        tags=tags,
+                        c=c, r=r, w=int(w_obj), h=int(h_obj),
+                        weight=float(weight),
+                    )
+                    add_entry(entry)
+        
+                    # lembra inputs
+                    st.session_state["last_name"] = entry.name
+                    st.session_state["last_weight"] = float(weight)
+                    st.session_state["last_w"] = int(w_obj)
+                    st.session_state["last_h"] = int(h_obj)
+        
+                    st.session_state["last_biome"] = biome_name
+                    st.session_state["last_role"] = role
+                    st.session_state["last_details"] = list(details)
+                    st.session_state["last_custom_tags"] = custom_tags_raw
+                    st.session_state["last_variant_n"] = int(variant_n)
+        
+                    st.success(f"Adicionado: {entry.id}")
                     st.rerun()
-
-        if len(filtered) > 250:
-            st.info("Mostrando só os primeiros 250 (use filtros).")
+        
+            # ----------------------------
+            # Catálogo atual
+            # ----------------------------
+            st.divider()
+            st.markdown("### Catálogo atual")
+            st.caption("Dica: use filtros por tag para achar rápido.")
+        
+            all_entries = list(st.session_state["catalog"].values())
+        
+            all_tags = sorted({t for e in all_entries for t in (e.get("tags") or [])})
+            tag_filter = st.multiselect("Filtrar por tags", options=all_tags, default=[])
+            kind_filter = st.multiselect("Filtrar por tipo", options=["tile", "object"], default=["tile", "object"])
+        
+            def _match(e: Dict) -> bool:
+                if e.get("kind") not in kind_filter:
+                    return False
+                if tag_filter:
+                    et = set(e.get("tags") or [])
+                    if not set(tag_filter).issubset(et):
+                        return False
+                return True
+        
+            filtered = [e for e in all_entries if _match(e)]
+            st.write(f"Items: **{len(filtered)}** (de {len(all_entries)})")
+        
+            for e in filtered[:250]:
+                cols_row = st.columns([3.2, 1.2, 0.9], gap="small")
+                with cols_row[0]:
+                    st.markdown(f"**{e['id']}** — `{e['kind']}` — {e.get('name','')}")
+                    st.caption(", ".join(e.get("tags") or []))
+                with cols_row[1]:
+                    st.caption(f"(c={e['c']}, r={e['r']})  {e['w']}x{e['h']}")
+                with cols_row[2]:
+                    if st.button("Remover", key=f"rm_{e['id']}", use_container_width=True):
+                        remove_entry(e["id"])
+                        st.rerun()
+        
+            if len(filtered) > 250:
+                st.info("Mostrando só os primeiros 250 (use filtros).")
 
 # ============================================================
 # TAB 2: Exportar
