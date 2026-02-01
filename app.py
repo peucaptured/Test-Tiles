@@ -448,9 +448,83 @@ with tab1:
 
     with c1:
         st.markdown("### Selecionar tile (col, row)")
-        col = st.slider("Coluna (c)", 0, sheet.cols - 1, 0)
-        row = st.slider("Linha (r)", 0, sheet.rows - 1, 0)
+                # --- estado do seletor ---
+        if "tile_c" not in st.session_state:
+            st.session_state["tile_c"] = 0
+        if "tile_r" not in st.session_state:
+            st.session_state["tile_r"] = 0
+        
+        # garante dentro do range
+        st.session_state["tile_c"] = int(np.clip(st.session_state["tile_c"], 0, sheet.cols - 1))
+        st.session_state["tile_r"] = int(np.clip(st.session_state["tile_r"], 0, sheet.rows - 1))
+        
+        def _wrap(v: int, lo: int, hi: int) -> int:
+            # wrap inclusivo [lo..hi]
+            n = hi - lo + 1
+            return lo + ((v - lo) % n)
+        
+        def move(dc: int = 0, dr: int = 0):
+            st.session_state["tile_c"] = _wrap(st.session_state["tile_c"] + dc, 0, sheet.cols - 1)
+            st.session_state["tile_r"] = _wrap(st.session_state["tile_r"] + dr, 0, sheet.rows - 1)
+            st.rerun()
+        
+        st.markdown("### Selecionar tile (col, row)")
+        
+        # step de pulo vertical
+        step = st.selectbox("Pulo vertical", [1, 5, 10, 25, 50, 100], index=2)
+        
+        # layout: botões + inputs
+        nav1, nav2 = st.columns([1.2, 2.8], gap="large")
+        
+        with nav1:
+            # Controles direcionais
+            up = st.button("▲", use_container_width=True)
+            left, right = st.columns(2, gap="small")
+            with left:
+                b_left = st.button("◀", use_container_width=True)
+            with right:
+                b_right = st.button("▶", use_container_width=True)
+            down = st.button("▼", use_container_width=True)
+        
+            # Pulos rápidos
+            st.markdown("**Pulos**")
+            j1, j2 = st.columns(2, gap="small")
+            with j1:
+                if st.button(f"-{step}", use_container_width=True):
+                    move(dr=-step)
+            with j2:
+                if st.button(f"+{step}", use_container_width=True):
+                    move(dr=+step)
+        
+            # aplica cliques direcionais
+            if up:
+                move(dr=-1)
+            if down:
+                move(dr=+1)
+            if b_left:
+                move(dc=-1)
+            if b_right:
+                move(dc=+1)
+        
+        with nav2:
+            # Inputs diretos (sem arrastar)
+            c_in = st.number_input("Coluna (c)", min_value=0, max_value=sheet.cols - 1,
+                                   value=int(st.session_state["tile_c"]), step=1)
+            r_in = st.number_input("Linha (r)", min_value=0, max_value=sheet.rows - 1,
+                                   value=int(st.session_state["tile_r"]), step=1)
+        
+            # se o usuário digitou, atualiza
+            if c_in != st.session_state["tile_c"] or r_in != st.session_state["tile_r"]:
+                st.session_state["tile_c"] = int(c_in)
+                st.session_state["tile_r"] = int(r_in)
+                st.rerun()
+        
+        # usa o estado para preview
+        col = st.session_state["tile_c"]
+        row = st.session_state["tile_r"]
         tile_preview = sheet.tile_at(col, row)
+        st.image(tile_preview.resize((128, 128), Image.NEAREST), caption=f"Tile (c={col}, r={row})")
+
         st.image(tile_preview.resize((128,128), Image.NEAREST), caption=f"Tile (c={col}, r={row})")
 
         layer = st.selectbox("Layer", ["ground", "overlay"])
