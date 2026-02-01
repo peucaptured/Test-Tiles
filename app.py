@@ -492,19 +492,15 @@ with tabs[0]:
                 w_obj, h_obj = 1, 1
             else:
                 st.markdown("#### Tamanho do objeto (em tiles)")
-                w_obj = st.number_input(
-                    "Largura", 2, 8,
-                    int(st.session_state.get("last_w", 2)),
-                    1,
-                    help="Quantos tiles na horizontal."
-                )
-                h_obj = st.number_input(
-                    "Altura", 2, 8,
-                    int(st.session_state.get("last_h", 2)),
-                    1,
-                    help="Quantos tiles na vertical."
-                )
-        
+            
+                _lw = int(st.session_state.get("last_w", 2))
+                _lh = int(st.session_state.get("last_h", 2))
+                _lw = max(2, min(8, _lw))
+                _lh = max(2, min(8, _lh))
+            
+                w_obj = st.number_input("Largura", 2, 8, _lw, 1, help="Quantos tiles na horizontal.")
+                h_obj = st.number_input("Altura", 2, 8, _lh, 1, help="Quantos tiles na vertical.")
+
             # ----------------------------
             # Preview do recorte
             # ----------------------------
